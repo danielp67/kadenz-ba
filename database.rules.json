@@ -1,0 +1,54 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid"
+      }
+    },
+
+    "rooms": {
+      ".indexOn": ["updatedAt"],
+      "$code": {
+        ".read": "auth != null && data.child('players').child(auth.uid).exists()",
+
+        "players": {
+          "$uid": {
+            "connected": {
+              ".write": "auth != null && auth.uid === $uid && root.child('rooms').child($code).child('players').child($uid).exists()",
+              ".validate": "newData.isBoolean()"
+            }
+          }
+        },
+
+        "progress": {
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid && root.child('rooms').child($code).child('players').child($uid).exists() && root.child('rooms').child($code).child('status').val() === 'PLAYING' && now >= root.child('rooms').child($code).child('startAt').val() - 1000",
+            ".validate": "newData.hasChildren(['remaining', 't', 'seq']) && newData.child('remaining').isNumber() && newData.child('remaining').val() >= 0 && newData.child('remaining').val() <= 60 && newData.child('t').isNumber() && newData.child('t').val() >= 0 && newData.child('t').val() <= 600000 && newData.child('seq').isNumber() && (!data.exists() || newData.child('seq').val() > data.child('seq').val())",
+            "remaining": {},
+            "t": {},
+            "seq": {},
+            "$other": { ".validate": false }
+          }
+        }
+      }
+    },
+
+    "leaderboard": {
+      "$season": {
+        ".read": "auth != null",
+        ".indexOn": ["rating"]
+      }
+    },
+
+    "matchmaking": {
+      "matches": {
+        "$uid": {
+          ".read": "auth != null && auth.uid === $uid"
+        }
+      }
+    }
+  }
+}
