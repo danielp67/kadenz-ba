@@ -9,10 +9,10 @@ const P = require('../progress');
 
 async function loadRoomFor(ctx, rawCode) {
   const code = normalizeCode(rawCode);
-  if (!code) throw new AppError('invalid-argument', 'Code invalide.');
+  if (!code) throw new AppError('invalid-argument', 'Code invalide.', 'CODE_INVALID');
   const room = await ctx.db.get(`rooms/${code}`);
-  if (!room) throw new AppError('not-found', 'Partie introuvable.');
-  if (!room.players || !room.players[ctx.uid]) throw new AppError('permission-denied', "Vous n'êtes pas dans cette partie.");
+  if (!room) throw new AppError('not-found', 'Partie introuvable.', 'ROOM_NOT_FOUND');
+  if (!room.players || !room.players[ctx.uid]) throw new AppError('permission-denied', "Vous n'êtes pas dans cette partie.", 'NOT_IN_ROOM');
   return { code, room };
 }
 
@@ -22,24 +22,24 @@ async function loadRoomFor(ctx, rawCode) {
 async function sendAttack(ctx, data) {
   const { code, room } = await loadRoomFor(ctx, data.code);
   const now = ctx.now();
-  if (room.status !== 'PLAYING' || now < room.startAt - 500) throw new AppError('failed-precondition', "La manche n'est pas en cours.");
+  if (room.status !== 'PLAYING' || now < room.startAt - 500) throw new AppError('failed-precondition', "La manche n'est pas en cours.", 'ROUND_NOT_RUNNING');
   const target = data.to;
-  if (typeof target !== 'string' || target === ctx.uid || !room.players[target]) throw new AppError('invalid-argument', 'Cible invalide.');
-  if ((room.finishes && room.finishes[target]) || room.players[target].left) throw new AppError('failed-precondition', 'Ce joueur a déjà fini.');
-  if (room.finishes && room.finishes[ctx.uid]) throw new AppError('failed-precondition', 'Vous avez déjà fini.');
+  if (typeof target !== 'string' || target === ctx.uid || !room.players[target]) throw new AppError('invalid-argument', 'Cible invalide.', 'TARGET_INVALID');
+  if ((room.finishes && room.finishes[target]) || room.players[target].left) throw new AppError('failed-precondition', 'Ce joueur a déjà fini.', 'TARGET_FINISHED');
+  if (room.finishes && room.finishes[ctx.uid]) throw new AppError('failed-precondition', 'Vous avez déjà fini.', 'SELF_FINISHED');
 
   let failure = null;
   await ctx.db.transaction(`rooms/${code}/attackState/${ctx.uid}`, (cur) => {
     failure = null;
     if (cur && now - cur.last < CFG.ATTACK_COOLDOWN_MS - CFG.ATTACK_COOLDOWN_TOLERANCE_MS) {
-      failure = ['failed-precondition', 'Attaque en recharge.']; return cur;
+      failure = ['failed-precondition', 'Attaque en recharge.', 'ATTACK_COOLDOWN']; return cur;
     }
     if (cur && cur.count >= CFG.MAX_ATTACKS_PER_ROUND) {
-      failure = ['resource-exhausted', "Trop d'attaques pour cette manche."]; return cur;
+      failure = ['resource-exhausted', "Trop d'attaques pour cette manche.", 'TOO_MANY_ATTACKS']; return cur;
     }
     return { last: now, count: (cur ? cur.count : 0) + 1 };
   });
-  if (failure) throw new AppError(failure[0], failure[1]);
+  if (failure) throw new AppError(failure[0], failure[1], failure[2]);
 
   const key = ctx.db.pushKey(`rooms/${code}/events`);
   await ctx.db.set(`rooms/${code}/events/${key}`, { type: 'ATTACK', from: ctx.uid, to: target, at: now });
@@ -50,7 +50,7 @@ async function sendAttack(ctx, data) {
 
 async function flag(ctx, code, reason) {
   await ctx.db.set(`rooms/${code}/flags/${ctx.uid}`, { reason, at: ctx.now() });
-  throw new AppError('permission-denied', `Victoire refusée : ${reason}.`);
+  throw new AppError('permission-denied', `Victoire refusée : ${reason}.`, 'FINISH_REJECTED');
 }
 
 /**
@@ -59,7 +59,7 @@ async function flag(ctx, code, reason) {
  */
 async function reportFinish(ctx, data) {
   const { code, room } = await loadRoomFor(ctx, data.code);
-  if (room.status !== 'PLAYING' && room.status !== 'FINALIZING') throw new AppError('failed-precondition', 'La manche est terminée.');
+  if (room.status !== 'PLAYING' && room.status !== 'FINALIZING') throw new AppError('failed-precondition', 'La manche est terminée.', 'ROUND_OVER');
   if (room.finishes && room.finishes[ctx.uid]) return { ok: true, duplicate: true };
 
   const now = ctx.now();
@@ -68,7 +68,7 @@ async function reportFinish(ctx, data) {
   const actions = Number(data.actions);
   const malus = Number(data.malus);
   if (!Number.isFinite(at) || !Number.isInteger(actions) || !Number.isInteger(malus)) {
-    throw new AppError('invalid-argument', 'Données de fin de manche invalides.');
+    throw new AppError('invalid-argument', 'Données de fin de manche invalides.', 'FINISH_DATA_INVALID');
   }
   const elapsed = now - room.startAt;
   if (at < 0 || at > elapsed + CFG.FINISH_TIME_TOLERANCE_MS) await flag(ctx, code, 'temps de jeu impossible');
@@ -113,7 +113,7 @@ async function finalizeRound(ctx, data) {
   } else if (room.status === 'FINALIZING' && now >= (room.finalizeAt || 0) + CFG.FINALIZE_SLACK_MS) {
     // une clôture est restée en suspens : on la termine
   } else {
-    throw new AppError('failed-precondition', 'La manche est encore en cours.');
+    throw new AppError('failed-precondition', 'La manche est encore en cours.', 'ROUND_IN_PROGRESS');
   }
   await resolveRound(ctx, code);
   return { ok: true, finished: true };
@@ -195,6 +195,7 @@ async function resolveRound(ctx, code, opts = {}) {
       rating: after.rating, rd: after.rd, vol: after.vol,
       games: (p.games || 0) + (rewardable ? 1 : 0), wins: (p.wins || 0) + (won ? 1 : 0),
       lastGameAt: now,
+      ...(rated ? { seasons: { ...(p.seasons || {}), [season]: true } } : {}),
     };
     if (rated) {
       updates[`leaderboard/${season}/${id}`] = {

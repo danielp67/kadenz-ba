@@ -9,7 +9,7 @@ const R = require('../src/handlers/rooms');
 test('ensureProfile : pseudo par défaut puis changement, pseudo invalide refusé', async () => {
   const env = makeEnv();
   const p = await ensureProfile(env.ctx('u1'), {});
-  assert.match(p.name, /^Joueur\d{4}$/);
+  assert.match(p.name, /^Player\d{4}$/);
   assert.equal(p.level, 1); assert.equal(p.league, 'BRONZE');
   const q = await ensureProfile(env.ctx('u1'), { name: 'Daniel' });
   assert.equal(q.name, 'Daniel');
@@ -146,4 +146,18 @@ test('quitter en pleine partie marque le joueur "parti" sans le retirer du class
   const room = await env.db.get(`rooms/${code}`);
   assert.equal(room.players.g.left, true);
   assert.ok(room.players.h);
+});
+
+test("chaque erreur porte une clé stable que l'app traduit (le message français n'est qu'un secours)", async () => {
+  const env = makeEnv();
+  const { code } = await R.createRoom(env.ctx('h'), {});
+  assert.equal((await rejects(R.joinRoom(env.ctx('x'), { code: 'ZZZZZ' }), 'not-found')).key, 'ROOM_NOT_FOUND');
+  assert.equal((await rejects(R.joinRoom(env.ctx('x'), { code: 'AB' }), 'invalid-argument')).key, 'CODE_INVALID');
+  assert.equal((await rejects(R.startGame(env.ctx('h'), { code }), 'failed-precondition')).key, 'NEED_TWO_PLAYERS');
+  assert.equal((await rejects(ensureProfile(env.ctx('u'), { name: '<b>' }), 'invalid-argument')).key, 'NAME_INVALID');
+  env.advance(5); await R.joinRoom(env.ctx('g'), { code });
+  assert.equal((await rejects(R.startGame(env.ctx('g'), { code }), 'permission-denied')).key, 'NOT_HOST');
+  assert.equal((await rejects(R.startGame(env.ctx('h'), { code }), 'failed-precondition')).key, 'NOT_ALL_READY');
+  for (let i = 0; i < 10; i++) await rejects(R.joinRoom(env.ctx('spam'), { code: 'ZZZZZ' }));
+  assert.equal((await rejects(R.joinRoom(env.ctx('spam'), { code: 'ZZZZZ' }), 'resource-exhausted')).key, 'TOO_MANY_ATTEMPTS');
 });

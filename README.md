@@ -30,8 +30,8 @@ kadenz-back/
     │   ├── rating.js        Glicko-2
     │   ├── progress.js      niveaux, ligues, saisons, récompenses, pseudos
     │   ├── codes.js         codes de room
-    │   └── handlers/        profile, rooms, matchmaking, rounds, cleanup
-    └── test/                254 tests (node:test, sans dépendance)
+    │   └── handlers/        profile, rooms, matchmaking, rounds, cleanup, account
+    └── test/                263 tests (node:test, sans dépendance)
 ```
 
 ## Prérequis
@@ -51,7 +51,7 @@ kadenz-back/
    firebase login
    cd functions
    npm install
-   npm test            # 254 tests doivent passer
+   npm test            # 263 tests doivent passer
    cd ..
    ```
 6. **Déployer** :
@@ -73,7 +73,7 @@ Côté Android : `./gradlew installDebug -PkadenzEmulator=true`. L'émulateur An
 
 ## API (fonctions appelables)
 
-Toutes exigent une connexion (anonyme) et répondent en erreurs Firebase standard avec un **message en français prêt à afficher**.
+Toutes exigent une connexion (anonyme) et répondent en erreurs Firebase standard. Chaque erreur métier porte une **clé stable** (`details.key`, ex. `ROOM_NOT_FOUND`) que l'application traduit dans la langue du joueur ; le message en français n'est qu'un texte de secours. Liste des clés : voir `functions/src/handlers/*.js` (chaînes `err_*` côté app).
 
 | Fonction | Rôle | Entrée | Sortie | Erreurs courantes |
 |---|---|---|---|---|
@@ -88,12 +88,13 @@ Toutes exigent une connexion (anonyme) et répondent en erreurs Firebase standar
 | `sendAttack` | Envoie une Carte Malus | `{code, to}` | `{ok}` | `failed-precondition` (recharge), `resource-exhausted` |
 | `reportFinish` | « J'ai vidé ma pile » + journal de coups | `{code, finishedAtMs, actions, log, malus}` | `{ok}` | `permission-denied` (victoire refusée + raison) |
 | `finalizeRound` | Chrono écoulé : clôturer la manche | `{code}` | `{ok, finished}` | `failed-precondition` (trop tôt) |
-| `cleanup` | *(planifiée, toutes les 5 min)* Ménage | — | — | — |
+| `deleteAccount` | Supprime le compte et toutes les données du joueur (rejouable) | `{}` | `{ok}` | — |
+| `cleanup` | *(planifiée, toutes les 5 min)* Ménage **par lots** | — | — | — |
 
 ## Modèle de données
 
 ```text
-users/{uid}                 profil, XP, pièces, classement (lecture : le joueur seul ; écriture : serveur seul)
+users/{uid}                 profil, XP, pièces, classement, saisons classées (lecture : le joueur seul ; écriture : serveur seul)
 rooms/{CODE}
   status                    LOBBY → PLAYING → FINALIZING → FINISHED
   hostUid, ranked, visibility, seed, startAt
@@ -120,6 +121,14 @@ matchmaking/queue|matches   file d'attente (serveur seul) ; chaque joueur lit sa
 Le **classement se fait sur le temps de jeu logique**, jamais sur l'ordre d'arrivée réseau : après la première victoire, une fenêtre de 2 s accueille les arrivées quasi simultanées, puis le serveur les départage sur leur temps de jeu (section 51.7 des specs). Un joueur dont la victoire est refusée ne touche aucune récompense ; une victoire valide envoyée ensuite annule ce signalement (un compteur de Malus erroné ne doit pas condamner un joueur honnête).
 
 **Limites à connaître** : seuls les *vainqueurs* sont rejoués. Un joueur qui ne finit pas annonce lui-même son nombre de cartes restantes, ce qui n'influence que sa place parmi les non-finisseurs. À durcir avant un lancement public : **App Check** (variable d'environnement `ENFORCE_APP_CHECK=true` une fois l'app enregistrée) et, si besoin, rejeu des journaux de tous les joueurs en fin de manche.
+
+## Ménage par lots
+
+Le ménage ne traite plus les rooms une à une : **une seule requête** repère les rooms inactives (500 au plus par passage ; le reste est repris au passage suivant), toutes les suppressions et transferts d'hôte sont accumulés puis écrits en **écritures groupées de 400 chemins**, et les manches bloquées sont clôturées **10 par 10 en parallèle**. 60 rooms abandonnées représentent ainsi une seule écriture, pas 180 (testé). Réglages : `CLEANUP_ROOMS_PER_RUN`, `CLEANUP_PATHS_PER_WRITE`, `CLEANUP_RESOLVE_PARALLEL` dans `config.js`. Si vous voulez encore moins d'invocations, passez la fréquence de 5 à 15 minutes dans `index.js` (`schedule`).
+
+## Suppression de compte
+
+`deleteAccount` efface en une écriture groupée le profil, les classements de toutes les saisons jouées (mémorisées dans `users/{uid}/seasons`), les limites de tentatives et l'assignation de matchmaking, retire le joueur de sa room (transfert d'hôte) et de la file d'attente, puis supprime le compte d'authentification. Elle est rejouable : si la dernière étape échoue, l'app peut la rappeler. L'identifiant et le pseudo restent le temps de l'existence des rooms concernées (lobby inactif : 30 min ; partie terminée : 1 h).
 
 ## Classement, ligues, saisons, récompenses
 
@@ -149,7 +158,7 @@ Chaque joueur écrit sa progression au plus 4 fois par seconde (≈ 100 octets).
 
 ## Ce qui est vérifié, et ce qui ne l'est pas
 
-**Vérifié (254 tests, hors ligne)** : toute la logique serveur sur un faux Realtime Database fidèle à la sémantique de Firebase — création et codes (y compris les collisions), rejoindre et ses erreurs, anti brute-force, migration d'hôte, démarrage, matchmaking, victoire validée par rejeu, tricheries détectées, classement au temps de jeu avec fenêtre de grâce, Glicko-2 (exemple de référence de Glickman), récompenses, ménage ; le câblage de `index.js` avec un faux Firebase ; et la **parité exacte** avec le moteur Java sur 48 cas.
+**Vérifié (263 tests, hors ligne)** : toute la logique serveur sur un faux Realtime Database fidèle à la sémantique de Firebase — création et codes (y compris les collisions), rejoindre et ses erreurs (avec leurs clés), suppression de compte, ménage par lots, anti brute-force, migration d'hôte, démarrage, matchmaking, victoire validée par rejeu, tricheries détectées, classement au temps de jeu avec fenêtre de grâce, Glicko-2 (exemple de référence de Glickman), récompenses, ménage ; le câblage de `index.js` avec un faux Firebase ; et la **parité exacte** avec le moteur Java sur 48 cas.
 
 **Non vérifié ici** (pas d'accès au réseau ni aux émulateurs) : le déploiement réel, et les **règles de sécurité** `database.rules.json` (JSON valide, mais jamais exécutées). Avant de publier, faites un tour dans l'émulateur et testez au minimum : un joueur ne peut pas lire une room où il n'est pas, ne peut pas écrire la progression d'un autre, ni écrire `status` ou `result`.
 

@@ -57,4 +57,7 @@ module.exports = Object.freeze({
   FINALIZING_STUCK_MS: 30_000,
   FINISHED_TTL_MS: 60 * 60_000,
   MATCH_ASSIGN_PURGE_MS: 5 * 60_000,
+  CLEANUP_ROOMS_PER_RUN: 500,       // au plus 500 rooms examinées par passage (le reste est traité au passage suivant)
+  CLEANUP_PATHS_PER_WRITE: 400,     // nombre de chemins supprimés par écriture groupée
+  CLEANUP_RESOLVE_PARALLEL: 10,     // manches bloquées clôturées 10 par 10
 });

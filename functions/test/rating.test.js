@@ -59,8 +59,9 @@ test('reset de saison : le classement est recompressé vers le centre, le RD rem
   assert.equal(P.applySeason(p, 'S6'), p);   // déjà à jour : rien ne change
 });
 
-test('pseudos : validation', () => {
+test('pseudos : validation, y compris les écritures non latines', () => {
   assert.equal(P.sanitizeName('  Daniel  '), 'Daniel');
+  for (const ok of ['Дмитрий', '小明同学', 'ਗੁਰਪ੍ਰੀਤ', 'José', 'Zoë 42']) assert.equal(P.sanitizeName(ok), ok);   // lettres + signes combinants (gurmukhi)
   assert.equal(P.sanitizeName('Zoé  Lou'), 'Zoé Lou');
   for (const bad of ['', 'a', 'x'.repeat(17), '<script>', 'a/b', null, 42]) assert.equal(P.sanitizeName(bad), null);
 });

@@ -212,6 +212,7 @@ test('partie classée : Glicko-2, XP, pièces et classement saisonnier', async (
   assert.equal(winner.wins, 1); assert.equal(winner.games, 1);
   assert.ok(winner.rating > 1000 && winner.xp >= 50 && winner.coins >= 30);
   assert.ok(winner.rd < 350);                                                      // plus de certitude après une partie
+  assert.deepEqual(winner.seasons, { S6: true });                                  // mémorisé pour pouvoir tout effacer à la suppression du compte
   const board = await env.db.get('leaderboard/S6');
   assert.deepEqual(Object.keys(board).sort(), users);
   assert.equal(board.u1.rating, Math.round(winner.rating));

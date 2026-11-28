@@ -28,14 +28,14 @@ function sanitizeName(raw) {
   if (typeof raw !== 'string') return null;
   const s = raw.normalize('NFC').trim().replace(/\s+/g, ' ');
   if (s.length < 2 || s.length > 16) return null;
-  if (!/^[\p{L}\p{N} _.\-]+$/u.test(s)) return null;
+  if (!/^[\p{L}\p{M}\p{N} _.\-]+$/u.test(s)) return null;
   return s;
 }
 
 function defaultName(uid) {
   let h = 0;
   for (const ch of uid) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return `Joueur${String(h % 10000).padStart(4, '0')}`;
+  return `Player${String(h % 10000).padStart(4, '0')}`;
 }
 
 /** Nouvelle saison : le classement est recompressé vers le centre (reset doux, 54.3). */

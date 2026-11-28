@@ -16,7 +16,7 @@ async function checkRateLimit(ctx, key, { max, windowMs }) {
     if (cur.count >= max) { blocked = true; return cur; }
     return { start: cur.start, count: cur.count + 1 };
   });
-  if (blocked) throw new AppError('resource-exhausted', 'Trop de tentatives. Réessayez dans un instant.');
+  if (blocked) throw new AppError('resource-exhausted', 'Trop de tentatives. Réessayez dans un instant.', 'TOO_MANY_ATTEMPTS');
 }
 
 function playersSorted(room) {
@@ -33,7 +33,7 @@ async function createRoomWithFreeCode(ctx, buildRoom) {
     const res = await ctx.db.transaction(`rooms/${code}`, (cur) => (cur === null ? room : undefined));
     if (res.committed) return code;
   }
-  throw new AppError('internal', 'Impossible de créer la partie. Réessayez.');
+  throw new AppError('internal', 'Impossible de créer la partie. Réessayez.', 'ROOM_CREATE_FAILED');
 }
 
 // ------------------------------------------------------------------ quitter
@@ -71,7 +71,7 @@ async function leaveCurrentRoom(ctx, uid, exceptCode) {
 
 async function createRoom(ctx, data) {
   if (data.visibility !== undefined && data.visibility !== 'PRIVATE') {
-    throw new AppError('invalid-argument', 'Seules les parties privées se créent à la main.');
+    throw new AppError('invalid-argument', 'Seules les parties privées se créent à la main.', 'PUBLIC_FORBIDDEN');
   }
   const profile = await getOrCreateProfile(ctx);
   await leaveCurrentRoom(ctx, ctx.uid, null);
@@ -88,7 +88,7 @@ async function createRoom(ctx, data) {
 async function joinRoom(ctx, data) {
   await checkRateLimit(ctx, 'join', CFG.JOIN_RATE_LIMIT);
   const code = normalizeCode(data.code);
-  if (!code) throw new AppError('invalid-argument', 'Code invalide : 5 caractères attendus.');
+  if (!code) throw new AppError('invalid-argument', 'Code invalide : 5 caractères attendus.', 'CODE_INVALID');
   const profile = await getOrCreateProfile(ctx);
   await leaveCurrentRoom(ctx, ctx.uid, code);
 
@@ -96,59 +96,59 @@ async function joinRoom(ctx, data) {
   let failure = null;
   const res = await ctx.db.transaction(`rooms/${code}`, (cur) => {
     failure = null;
-    if (cur === null) { failure = ['not-found', 'Code introuvable. Vérifiez-le auprès de votre ami.']; return null; }
+    if (cur === null) { failure = ['not-found', 'Code introuvable. Vérifiez-le auprès de votre ami.', 'ROOM_NOT_FOUND']; return null; }
     if (cur.players && cur.players[ctx.uid]) return cur;                 // déjà dedans : on laisse faire
-    if (cur.status !== 'LOBBY') { failure = ['failed-precondition', 'La partie a déjà commencé.']; return cur; }
-    if (Object.keys(cur.players || {}).length >= cur.maxPlayers) { failure = ['resource-exhausted', 'La partie est pleine.']; return cur; }
+    if (cur.status !== 'LOBBY') { failure = ['failed-precondition', 'La partie a déjà commencé.', 'ROOM_STARTED']; return cur; }
+    if (Object.keys(cur.players || {}).length >= cur.maxPlayers) { failure = ['resource-exhausted', 'La partie est pleine.', 'ROOM_FULL']; return cur; }
     cur.players[ctx.uid] = { name: profile.name, ready: false, connected: true, joinedAt: now };
     cur.updatedAt = now;
     return cur;
   });
-  if (failure) throw new AppError(failure[0], failure[1]);
-  if (!res.value) throw new AppError('not-found', 'Code introuvable. Vérifiez-le auprès de votre ami.');
+  if (failure) throw new AppError(failure[0], failure[1], failure[2]);
+  if (!res.value) throw new AppError('not-found', 'Code introuvable. Vérifiez-le auprès de votre ami.', 'ROOM_NOT_FOUND');
   await ctx.db.set(`users/${ctx.uid}/currentRoom`, code);
   return { code };
 }
 
 async function leaveRoom(ctx, data) {
   const code = normalizeCode(data.code);
-  if (!code) throw new AppError('invalid-argument', 'Code invalide.');
+  if (!code) throw new AppError('invalid-argument', 'Code invalide.', 'CODE_INVALID');
   await leaveRoomInternal(ctx, ctx.uid, code);
   return { ok: true };
 }
 
 async function setReady(ctx, data) {
   const code = normalizeCode(data.code);
-  if (!code) throw new AppError('invalid-argument', 'Code invalide.');
+  if (!code) throw new AppError('invalid-argument', 'Code invalide.', 'CODE_INVALID');
   let failure = null;
   await ctx.db.transaction(`rooms/${code}`, (cur) => {
     failure = null;
-    if (cur === null) { failure = ['not-found', 'Partie introuvable.']; return null; }
-    if (!cur.players || !cur.players[ctx.uid]) { failure = ['permission-denied', "Vous n'êtes pas dans cette partie."]; return cur; }
-    if (cur.status !== 'LOBBY') { failure = ['failed-precondition', 'La partie a déjà commencé.']; return cur; }
+    if (cur === null) { failure = ['not-found', 'Partie introuvable.', 'ROOM_NOT_FOUND']; return null; }
+    if (!cur.players || !cur.players[ctx.uid]) { failure = ['permission-denied', "Vous n'êtes pas dans cette partie.", 'NOT_IN_ROOM']; return cur; }
+    if (cur.status !== 'LOBBY') { failure = ['failed-precondition', 'La partie a déjà commencé.', 'ROOM_STARTED']; return cur; }
     cur.players[ctx.uid].ready = cur.hostUid === ctx.uid ? true : !!data.ready;
     cur.updatedAt = ctx.now();
     return cur;
   });
-  if (failure) throw new AppError(failure[0], failure[1]);
+  if (failure) throw new AppError(failure[0], failure[1], failure[2]);
   return { ok: true };
 }
 
 /** L'hôte lance la partie : le serveur tire la graine et fixe l'instant du GO (horloge serveur unique pour tous). */
 async function startGame(ctx, data) {
   const code = normalizeCode(data.code);
-  if (!code) throw new AppError('invalid-argument', 'Code invalide.');
+  if (!code) throw new AppError('invalid-argument', 'Code invalide.', 'CODE_INVALID');
   const now = ctx.now();
   const seed = ctx.randomSeed();
   let failure = null; let startAt = null;
   await ctx.db.transaction(`rooms/${code}`, (cur) => {
     failure = null;
-    if (cur === null) { failure = ['not-found', 'Partie introuvable.']; return null; }
-    if (cur.hostUid !== ctx.uid) { failure = ['permission-denied', "Seul l'hôte peut lancer la partie."]; return cur; }
-    if (cur.status !== 'LOBBY') { failure = ['failed-precondition', 'La partie a déjà commencé.']; return cur; }
+    if (cur === null) { failure = ['not-found', 'Partie introuvable.', 'ROOM_NOT_FOUND']; return null; }
+    if (cur.hostUid !== ctx.uid) { failure = ['permission-denied', "Seul l'hôte peut lancer la partie.", 'NOT_HOST']; return cur; }
+    if (cur.status !== 'LOBBY') { failure = ['failed-precondition', 'La partie a déjà commencé.', 'ROOM_STARTED']; return cur; }
     const list = playersSorted(cur);
-    if (list.length < CFG.MIN_PLAYERS_TO_START) { failure = ['failed-precondition', 'Il faut au moins 2 joueurs.']; return cur; }
-    if (list.some((p) => p.uid !== cur.hostUid && !p.ready)) { failure = ['failed-precondition', 'Tous les joueurs doivent être prêts.']; return cur; }
+    if (list.length < CFG.MIN_PLAYERS_TO_START) { failure = ['failed-precondition', 'Il faut au moins 2 joueurs.', 'NEED_TWO_PLAYERS']; return cur; }
+    if (list.some((p) => p.uid !== cur.hostUid && !p.ready)) { failure = ['failed-precondition', 'Tous les joueurs doivent être prêts.', 'NOT_ALL_READY']; return cur; }
     list.forEach((p, i) => { cur.players[p.uid].playerIndex = i; });
     cur.status = 'PLAYING';
     cur.seed = seed;
@@ -158,7 +158,7 @@ async function startGame(ctx, data) {
     startAt = cur.startAt;
     return cur;
   });
-  if (failure) throw new AppError(failure[0], failure[1]);
+  if (failure) throw new AppError(failure[0], failure[1], failure[2]);
   return { startAt };
 }
 

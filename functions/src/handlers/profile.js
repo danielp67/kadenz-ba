@@ -16,7 +16,7 @@ async function ensureProfile(ctx, data) {
   let name = null;
   if (data.name !== undefined && data.name !== null && data.name !== '') {
     name = P.sanitizeName(data.name);
-    if (name === null) throw new AppError('invalid-argument', 'Pseudo invalide : 2 à 16 caractères (lettres, chiffres, espace, _ . -).');
+    if (name === null) throw new AppError('invalid-argument', 'Pseudo invalide : 2 à 16 caractères (lettres, chiffres, espace, _ . -).', 'NAME_INVALID');
   }
   const p = await getOrCreateProfile(ctx, name);
   if (name && p.name !== name) {

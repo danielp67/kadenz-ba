@@ -21,6 +21,7 @@ const rooms = require('./src/handlers/rooms');
 const matchmaking = require('./src/handlers/matchmaking');
 const rounds = require('./src/handlers/rounds');
 const { cleanupRooms } = require('./src/handlers/cleanup');
+const { deleteAccount } = require('./src/handlers/account');
 
 const db = adminDb(admin.database());
 
@@ -35,6 +36,9 @@ function makeCtx(uid) {
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     randomInt: (n) => crypto.randomInt(n),
     randomSeed: () => crypto.randomBytes(6).readUIntBE(0, 6),   // 48 bits : tient exactement dans un nombre JS et dans un long Java
+    deleteAuthUser: async (id) => {
+      try { await admin.auth().deleteUser(id); } catch (e) { if (e.code !== 'auth/user-not-found') throw e; }
+    },
   };
 }
 
@@ -47,7 +51,8 @@ function callable(handler, options = {}) {
       try {
         return await handler(makeCtx(request.auth.uid), request.data || {});
       } catch (e) {
-        if (e instanceof AppError) throw new HttpsError(e.code, e.message);
+        // `details.key` : identifiant stable que l'app traduit dans la langue du joueur
+        if (e instanceof AppError) throw new HttpsError(e.code, e.message, { key: e.key });
         logger.error('Erreur inattendue', e);
         throw new HttpsError('internal', 'Erreur serveur. Réessayez.');
       }
@@ -67,6 +72,7 @@ exports.cancelQuickMatch = callable(matchmaking.cancelQuickMatch);
 exports.sendAttack       = callable(rounds.sendAttack);
 exports.reportFinish     = callable(rounds.reportFinish, { timeoutSeconds: 30 });   // attend la fenêtre de grâce avant de publier le classement
 exports.finalizeRound    = callable(rounds.finalizeRound, { timeoutSeconds: 30 });
+exports.deleteAccount    = callable(deleteAccount);
 
 // ---- Ménage planifié (nécessite le forfait Blaze : Cloud Scheduler) -------------------------
 exports.cleanup = onSchedule(
